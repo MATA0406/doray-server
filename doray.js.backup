@@ -1,0 +1,573 @@
+/********************************************
+ * 개선된 자동 출퇴근 스크립트 (macOS)
+ *  - 하루 종일 log stream 감시
+ *  - 18시 이후 15분 미감지 시 퇴근
+ *  - 21시 이후 강제 퇴근 시도(1회)
+ *  - 10분마다 log stream 재시작
+ ********************************************/
+
+const os = require("os");
+const puppeteer = require("puppeteer");
+const { spawn } = require("child_process");
+
+// -------------------------
+// 환경설정 및 전역 변수
+// -------------------------
+const TARGET_MAC = "60:06:E3:97:04:E5";
+
+let lastRSSI = null; // 가장 최근에 감지된 RSSI
+let lastDetectedTime = null; // 마지막 BT 감지 시각
+let logProcess = null; // log stream 프로세스
+let isWorkStarted = false; // 오늘 출근 처리 여부 (프로세스 재시작 시 리셋됨)
+let workEndInterval = null; // 퇴근 감지 setInterval
+let forcedCheckOutDone = false; // 21시 강제 퇴근(1회) 여부
+let isCheckoutInProgress = false; // 퇴근 자동화 동시 실행 방지 플래그
+let isLogStreamRunning = false; // log stream 중복 실행 방지
+
+// Store today's check-in/check-out times
+let todaysCheckInTime = null;
+let todaysCheckOutTime = null;
+
+// -------------------------
+// 헬퍼 함수: 재시도 로직
+// -------------------------
+async function retryOperation(operation, retries = 3, delay = 3000) {
+  let attempt = 0;
+  while (attempt < retries) {
+    try {
+      return await operation();
+    } catch (err) {
+      attempt++;
+      console.error(`작업 실패 (시도 ${attempt}/${retries}): ${err.message}`);
+      if (attempt < retries) {
+        await new Promise((res) => setTimeout(res, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+// -------------------------
+// RSSI 해석 함수
+// -------------------------
+function getSignalStrength(rssi) {
+  if (rssi >= -50) return "🟢 매우 강함";
+  if (rssi >= -60) return "🟡 강함";
+  if (rssi >= -70) return "🟠 보통";
+  return "🔴 약함";
+}
+
+// -------------------------
+// 출근 시간 체크 (오전 8:00 ~ 9:30)
+// -------------------------
+function isWorkTime() {
+  const now = new Date();
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+  return hour === 8 || (hour === 9 && minute <= 30);
+}
+
+// -------------------------
+// 실시간 Bluetooth 로그 감시
+// -------------------------
+function startLogStream() {
+  if (isLogStreamRunning) {
+    console.log("⚠️ startLogStream 이미 실행 중, 중복 호출 방지");
+    return;
+  }
+  isLogStreamRunning = true;
+
+  console.log(`\n🚀 실시간 Bluetooth 감지 시작... (대상: ${TARGET_MAC})`);
+
+  // log stream 프로세스 실행
+  logProcess = spawn(
+    "sudo",
+    ["log", "stream", "--predicate", 'process == "nearbyd"', "--info"],
+    {
+      stdio: ["inherit", "pipe", "pipe"],
+    }
+  );
+
+  // 로그 데이터를 수신하여 대상 MAC 및 RSSI 처리
+  logProcess.stdout.on("data", (data) => {
+    try {
+      const output = data.toString();
+      if (output.includes(TARGET_MAC)) {
+        const timestamp = new Date().toLocaleString("ko-KR", {
+          timeZone: "Asia/Seoul",
+        });
+        const matchRSSI = output.match(/RSSI (-?\d+)/);
+        const rssi = matchRSSI ? parseInt(matchRSSI[1]) : null;
+
+        // 매 감지 시 마지막 감지 시간 업데이트
+        lastDetectedTime = new Date();
+
+        // 출근 조건 체크: 아직 출근하지 않았고, 출근 시간이며, RSSI 값이 변경된 경우
+        if (!isWorkStarted && isWorkTime() && rssi !== lastRSSI) {
+          const signalStrength = getSignalStrength(rssi);
+          console.log(`[${timestamp}] ✅ 대상 기기 감지됨! (출근 로직)`);
+          console.log(`📡 Bluetooth Address: ${TARGET_MAC}`);
+          console.log(`📶 RSSI 값: ${rssi} (${signalStrength})`);
+          console.log("🚀 출근 자동화 트리거 실행!");
+          console.log("----------------------------------------------------");
+
+          // macOS 알림
+          spawn("osascript", [
+            "-e",
+            `display notification "Apple Watch 감지됨 - 출근 기록" with title "Auto Check-in" subtitle "RSSI: ${rssi} (${signalStrength})"`,
+          ]);
+
+          lastRSSI = rssi;
+          isWorkStarted = true;
+
+          // 출근 자동화 실행 (재시도)
+          retryOperation(startTicketing, 3, 2000)
+            .then(() => {
+              // 출근 후 퇴근 감지 시작
+              startWorkEndInterval();
+            })
+            .catch((err) => console.error("출근 자동화 실패:", err));
+        } else {
+          // 단순 RSSI 업데이트
+          lastRSSI = rssi;
+        }
+      }
+    } catch (error) {
+      console.error("로그 데이터 처리 중 오류:", error);
+    }
+  });
+
+  logProcess.stderr.on("data", (data) => {
+    console.error(`❌ log stream 오류: ${data.toString()}`);
+  });
+
+  logProcess.on("close", () => {
+    console.log("⚠️ log stream 종료됨 - 자동 재시작 대기");
+    isLogStreamRunning = false;
+    setTimeout(startLogStream, 2000);
+  });
+
+  // 60분마다 log stream 강제 재시작 (메모리 누수 방지 등)
+  setTimeout(() => {
+    console.log("♻️ 60분 경과 - log stream 강제 재시작");
+    if (logProcess) {
+      logProcess.kill();
+      isLogStreamRunning = false; // 강제 종료 후 다음 호출 가능
+    }
+  }, 60 * 60 * 1000);
+}
+
+// -------------------------
+// Puppeteer 출근 자동화
+// -------------------------
+async function startTicketing() {
+  console.log("🚀 출근 자동화 시작...");
+  const headlessMode = process.env.DEBUG ? false : true;
+
+  // 고유한 프로필 디렉토리 생성 (타임스탬프 사용)
+  const profileDir = `/tmp/puppeteer_checkin_${Date.now()}`;
+
+  const browser = await puppeteer.launch({
+    headless: headlessMode,
+    userDataDir: profileDir,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
+  const page = await browser.newPage();
+
+  try {
+    await page.goto(
+      "https://monthlykitchen.dooray.com/work-schedule/user/register-month",
+      { waitUntil: "networkidle2" }
+    );
+    await page.waitForSelector('input[title="아이디"]', { timeout: 8000 });
+    await page.waitForSelector('input[title="비밀번호"]', { timeout: 8000 });
+
+    const USERNAME = "jhjung";
+    const PASSWORD = "sodlfmadms0!";
+
+    console.log("📝 아이디 입력 중...");
+    await page.type('.input-box input[type="text"]', USERNAME, { delay: 100 });
+    console.log("🔑 비밀번호 입력 중...");
+    await page.type('.input-box input[type="password"]', PASSWORD, {
+      delay: 100,
+    });
+
+    console.log("🚀 로그인 시도...");
+    await page.click(".submit-button.blue");
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 8000 });
+
+    console.log("✅ 로그인 성공! 출근 버튼 탐색 중...");
+    const checkInButton = await page.evaluateHandle(() => {
+      return [...document.querySelectorAll("button.check-button")].find((btn) =>
+        btn.textContent.includes("출근")
+      );
+    });
+
+    if (checkInButton) {
+      const isDisabled = await page.evaluate(
+        (button) => button.disabled,
+        checkInButton
+      );
+      if (!isDisabled) {
+        console.log("✅ 출근 버튼 찾음! 클릭 시도...");
+        // 🧪 TEST MODE: 실제 클릭 대신 로그만 출력
+        console.log("🧪 [TEST MODE] 출근 버튼 클릭 시뮬레이션!");
+        console.log("🧪 [TEST MODE] 실제 출근 처리는 하지 않습니다.");
+        
+        // await checkInButton.click();
+        // console.log("🚀 출근 버튼 클릭 완료!");
+
+        console.log("🧪 [TEST MODE] 출근 완료 시뮬레이션!");
+
+        // Save today's check-in time
+        todaysCheckInTime = new Date();
+      } else {
+        console.log("❌ 출근 버튼이 이미 비활성화됨.");
+      }
+    } else {
+      console.log("❌ 출근 버튼을 찾지 못함 (이미 출근했을 가능성).");
+    }
+  } catch (error) {
+    console.error("❌ 출근 자동화 중 오류:", error);
+    throw error;
+  } finally {
+    await browser.close();
+    // 임시 프로필 디렉토리 정리
+    try {
+      const fs = require('fs');
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    } catch (e) {
+      // 정리 실패는 무시
+    }
+  }
+}
+
+// -------------------------
+// Puppeteer 퇴근 자동화
+// -------------------------
+async function startCheckOut() {
+  // 동시 퇴근 실행 방지
+  if (isCheckoutInProgress) {
+    console.log("⚠️ 이미 퇴근 자동화 진행 중입니다.");
+    return;
+  }
+  isCheckoutInProgress = true;
+  console.log("🚀 퇴근 자동화 시작...");
+  const headlessMode = process.env.DEBUG ? false : true;
+
+  // 고유한 프로필 디렉토리 생성 (타임스탬프 사용)
+  const profileDir = `/tmp/puppeteer_checkout_${Date.now()}`;
+
+  const browser = await puppeteer.launch({
+    headless: headlessMode,
+    userDataDir: profileDir,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
+  const page = await browser.newPage();
+
+  try {
+    await page.goto(
+      "https://monthlykitchen.dooray.com/work-schedule/user/register-month",
+      { waitUntil: "networkidle2" }
+    );
+    await page.waitForSelector('input[title="아이디"]', { timeout: 8000 });
+    await page.waitForSelector('input[title="비밀번호"]', { timeout: 8000 });
+
+    const USERNAME = "jhjung";
+    const PASSWORD = "sodlfmadms0!";
+
+    console.log("📝 아이디 입력 중...");
+    await page.type('.input-box input[type="text"]', USERNAME, { delay: 100 });
+    console.log("🔑 비밀번호 입력 중...");
+    await page.type('.input-box input[type="password"]', PASSWORD, {
+      delay: 100,
+    });
+
+    console.log("🚀 로그인 시도...");
+    await page.click(".submit-button.blue");
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 8000 });
+
+    console.log("✅ 로그인 성공! 퇴근 버튼 탐색 중...");
+    const checkOutButton = await page.evaluateHandle(() => {
+      return [...document.querySelectorAll("button.check-button")].find((btn) =>
+        btn.textContent.includes("퇴근")
+      );
+    });
+
+    if (checkOutButton) {
+      console.log("✅ 퇴근 버튼 찾음! 클릭 시도...");
+      // 🧪 TEST MODE: 실제 클릭 대신 로그만 출력
+      console.log("🧪 [TEST MODE] 퇴근 버튼 클릭 시뮬레이션!");
+      console.log("🧪 [TEST MODE] 실제 퇴근 처리는 하지 않습니다.");
+      
+      // await checkOutButton.click();
+      // console.log("🚀 퇴근 버튼 클릭 완료!");
+
+      // 버튼 비활성화(퇴근 완료) 대기 - 테스트 모드에서는 스킵
+      // await page.waitForFunction(
+      //   () => {
+      //     const btn = document.querySelector("button.check-button");
+      //     return btn && btn.disabled === true;
+      //   },
+      //   { timeout: 10000 }
+      // );
+
+      console.log("🧪 [TEST MODE] 퇴근 완료 시뮬레이션!");
+
+      // macOS 알림 - 테스트 모드에서도 유지
+      spawn("osascript", [
+        "-e",
+        `display notification "🧪 TEST MODE: 퇴근 기록 시뮬레이션" with title "Auto Check-out TEST"`,
+      ]);
+
+      // Save today's check-out time
+      todaysCheckOutTime = new Date();
+    } else {
+      console.log("❌ 퇴근 버튼을 찾지 못함 (이미 퇴근했거나 비활성화됨).");
+    }
+  } catch (error) {
+    console.error("❌ 퇴근 자동화 중 오류:", error);
+    throw error;
+  } finally {
+    await browser.close();
+    // 퇴근 후 상태 초기화 (다음 출근을 위해)
+    lastRSSI = null;
+    isWorkStarted = false;
+    lastDetectedTime = null;
+    isCheckoutInProgress = false;
+    // 임시 프로필 디렉토리 정리
+    try {
+      const fs = require('fs');
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    } catch (e) {
+      // 정리 실패는 무시
+    }
+  }
+}
+
+// -------------------------
+// 18시 이후 15분 미감지 시 퇴근 처리
+// -------------------------
+function startWorkEndInterval() {
+  if (workEndInterval) {
+    console.log("⚠️ 퇴근 감지 타이머 이미 실행 중");
+    return;
+  }
+  console.log("⏳ 퇴근 감지 타이머 시작... (매 1분 간격)");
+
+  workEndInterval = setInterval(async () => {
+    const now = new Date();
+    const hour = now.getHours();
+
+    // 18시 이후 15분(900초) 미감지 시 퇴근
+    if (hour >= 18) {
+      if (!lastDetectedTime) {
+        // 감지 시간이 전혀 없으면 현재 시간으로 업데이트
+        lastDetectedTime = new Date();
+      }
+      const timeDiff = (now - lastDetectedTime) / 1000; // 초 단위
+
+      // 15분간 미감지
+      if (timeDiff >= 900) {
+        console.log("🚀 15분간 Bluetooth 미감지 - 퇴근 자동화 실행!");
+
+        // 퇴근 처리
+        try {
+          await retryOperation(startCheckOut, 3, 2000);
+        } catch (err) {
+          console.error("퇴근 자동화 실패:", err);
+        } finally {
+          // 다음 날 출근 전까지는 퇴근 상태 유지
+          clearInterval(workEndInterval);
+          workEndInterval = null;
+          lastDetectedTime = null;
+          forcedCheckOutDone = false;
+        }
+      }
+    }
+  }, 60 * 1000); // 1분 간격
+}
+
+// -------------------------
+// 프로세스 종료 시 정리
+// -------------------------
+process.on("exit", () => {
+  console.log("프로세스 종료됨");
+  if (logProcess) logProcess.kill();
+  if (workEndInterval) clearInterval(workEndInterval);
+});
+
+// -------------------------
+// 매일 자정 후 상태 초기화 로직
+// -------------------------
+function scheduleMidnightReset() {
+  const now = new Date();
+  // 내일 자정 계산
+  const tomorrow = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+    0,
+    0,
+    0,
+    0
+  );
+  const msUntilMidnight = tomorrow - now;
+  setTimeout(() => {
+    // 상태 변수 초기화
+    lastRSSI = null;
+    lastDetectedTime = null;
+    isWorkStarted = false;
+    forcedCheckOutDone = false;
+    isCheckoutInProgress = false;
+    if (workEndInterval) {
+      clearInterval(workEndInterval);
+      workEndInterval = null;
+    }
+    console.log("🌙 [Daily Reset] 모든 상태 변수를 초기화했습니다.");
+    // 내일 자정에도 실행되도록 재스케줄
+    scheduleMidnightReset();
+  }, msUntilMidnight);
+}
+
+// -------------------------
+// 전체 프로세스 시작 (메인)
+// -------------------------
+(function main() {
+  const nowStr = new Date().toLocaleTimeString("ko-KR", {
+    timeZone: "Asia/Seoul",
+  });
+  console.log(`\n⏸️ 현재 시간: ${nowStr}`);
+  console.log(`사용자: jhjung`);
+
+  // (1) 로그 감시 시작 (종일 유지)
+  startLogStream();
+
+  // (2) 혹시 출근을 이미 했다고 가정하고, 퇴근 감지 타이머도 바로 시작
+  //    - 출근 안 했으면 어차피 18시 이후에 "미감지 15분" 조건은 못 맞추니 OK
+  startWorkEndInterval();
+
+  // (3) 혹여나 재시작 시, 지금 시간이 이미 21시를 넘었다면, 강제 퇴근 시도
+  // const hour = new Date().getHours();
+  // if (hour >= 21 && !forcedCheckOutDone) {
+  //   console.log('⏰ 프로세스 재시작 시점이 21시 이후 - 즉시 강제 퇴근 시도!');
+  //   forcedCheckOutDone = true;
+  //   retryOperation(startCheckOut, 3, 2000).catch(err => {
+  //     console.error('재시작 후 강제 퇴근 실패:', err);
+  //   });
+  // }
+})();
+
+// 매일 자정 이후 상태 초기화를 위한 스케줄링 시작
+scheduleMidnightReset();
+
+// Return today's check-in and check-out status from actual Doray website
+async function getTodayStatus() {
+  console.log("🔍 두레이에서 실제 출퇴근 시간 조회 중...");
+  
+  // 고유한 프로필 디렉토리 생성 (타임스탬프 사용)
+  const profileDir = `/tmp/puppeteer_status_${Date.now()}`;
+  
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    userDataDir: profileDir
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.goto("https://monthlykitchen.dooray.com/work-schedule/user/register-month", {
+      waitUntil: "networkidle2",
+      timeout: 10000,
+    });
+
+    // 로그인
+    const USERNAME = "jhjung";
+    const PASSWORD = "sodlfmadms0!";
+
+    await page.type('.input-box input[type="text"]', USERNAME, { delay: 100 });
+    await page.type('.input-box input[type="password"]', PASSWORD, { delay: 100 });
+    await page.click(".submit-button.blue");
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 8000 });
+
+    console.log("✅ 로그인 성공! 출퇴근 기록 조회 중...");
+
+    // 페이지가 완전히 로드될 때까지 잠시 대기
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // XPath를 사용해서 실제 출퇴근 시간 가져오기
+    const todayStatus = await page.evaluate(() => {
+      // XPath로 요소 찾는 헬퍼 함수
+      function getElementByXPath(xpath) {
+        return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+      }
+      
+      // 출근 시간 가져오기 (제공된 XPath 사용)
+      const checkInElement = getElementByXPath('/html/body/div[1]/div/div[2]/section/div/div[1]/div/div[1]/div[2]/div[2]/div[1]/p');
+      const checkInTime = checkInElement ? checkInElement.textContent?.trim() : '';
+      
+      // 퇴근 시간 가져오기 (출근 시간 XPath에서 유추)
+      // 보통 출근이 div[1]이면 퇴근은 div[2] 또는 div[3]일 가능성이 높음
+      let checkOutTime = '';
+      const possibleCheckOutPaths = [
+        '/html/body/div[1]/div/div[2]/section/div/div[1]/div/div[1]/div[2]/div[2]/div[2]/p', // div[2]
+        '/html/body/div[1]/div/div[2]/section/div/div[1]/div/div[1]/div[2]/div[2]/div[3]/p', // div[3]
+        '/html/body/div[1]/div/div[2]/section/div/div[1]/div/div[1]/div[2]/div[3]/div[1]/p', // div[3]/div[1]
+        '/html/body/div[1]/div/div[2]/section/div/div[1]/div/div[1]/div[2]/div[3]/div[2]/p'  // div[3]/div[2]
+      ];
+      
+      for (const xpath of possibleCheckOutPaths) {
+        const element = getElementByXPath(xpath);
+        if (element && element.textContent?.trim()) {
+          checkOutTime = element.textContent.trim();
+          console.log(`🔍 [DEBUG] 퇴근 시간을 찾았습니다 (${xpath}):`, checkOutTime);
+          break;
+        }
+      }
+      
+      console.log("🔍 [DEBUG] 출근 시간:", checkInTime);
+      console.log("🔍 [DEBUG] 퇴근 시간:", checkOutTime);
+      
+      // 시간 형식 검증 (HH:MM 형태인지 확인)
+      const timePattern = /^\d{2}:\d{2}$/;
+      const validCheckIn = timePattern.test(checkInTime) ? checkInTime : '';
+      const validCheckOut = timePattern.test(checkOutTime) ? checkOutTime : '';
+      
+      return {
+        checkIn: validCheckIn,
+        checkOut: validCheckOut
+      };
+    });
+
+    console.log("✅ 두레이 출퇴근 상태 조회 완료:", todayStatus);
+    return todayStatus;
+
+  } catch (error) {
+    console.error("❌ 두레이 상태 조회 실패:", error);
+    // 실패 시 메모리에 저장된 값 반환
+    return {
+      checkIn: todaysCheckInTime
+        ? todaysCheckInTime.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" })
+        : "",
+      checkOut: todaysCheckOutTime
+        ? todaysCheckOutTime.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" })
+        : ""
+    };
+  } finally {
+    await browser.close();
+    // 임시 프로필 디렉토리 정리
+    try {
+      const fs = require('fs');
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    } catch (e) {
+      // 정리 실패는 무시
+    }
+  }
+}
+
+module.exports = {
+  startCheckIn: startTicketing,
+  startCheckOut,
+  getTodayStatus
+};

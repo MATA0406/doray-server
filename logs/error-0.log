@@ -1,0 +1,2 @@
+2025-05-27T15:13:10: ❌ [실제조회] 전체 실패: net::ERR_SOCKET_NOT_CONNECTED at https://monthlykitchen.dooray.com/work-schedule/user/register-month
+2025-05-27T15:13:10: ❌ [API] net::ERR_SOCKET_NOT_CONNECTED at https://monthlykitchen.dooray.com/work-schedule/user/register-month

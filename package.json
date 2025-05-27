@@ -1,0 +1,29 @@
+{
+  "name": "doray-server",
+  "version": "1.0.0",
+  "description": "두레이 자동 출퇴근 시스템",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "auto": "sudo node index.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:start-auto": "sudo pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop doray-server",
+    "pm2:restart": "pm2 restart doray-server",
+    "pm2:delete": "pm2 delete doray-server",
+    "pm2:logs": "pm2 logs doray-server",
+    "pm2:status": "pm2 status"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "puppeteer": "^23.11.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "keywords": ["dooray", "automation", "attendance"],
+  "author": "Your Name",
+  "license": "ISC"
+}
