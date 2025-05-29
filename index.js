@@ -145,16 +145,162 @@ async function startCheckIn() {
     await doLogin(page);
 
     console.log("🔍 출근 버튼 탐색 중...");
-    await page.waitForSelector(".work-schedule-panel", { timeout: 8000 });
+    
+    // 페이지 로딩 대기 (work-schedule-panel 대신 더 일반적인 대기)
+    console.log("⏳ 페이지 로딩 대기 중...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    const checkInButton = await page.$(".check-in-button:not(.disabled)");
+    let checkInButton = null;
+    
+    // 방법 1: 텍스트 기반으로 '출근하기' 버튼 찾기
+    try {
+      console.log("📝 방법 1: '출근하기' 텍스트로 버튼 찾는 중...");
+      checkInButton = await page.evaluateHandle(() => {
+        const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+        return buttons.find(btn => 
+          btn.textContent && 
+          btn.textContent.trim().includes('출근하기') &&
+          !btn.disabled &&
+          !btn.classList.contains('disabled')
+        );
+      });
+      
+      if (checkInButton && await checkInButton.evaluate(el => el)) {
+        console.log("✅ 방법 1 성공: '출근하기' 텍스트 버튼 발견!");
+      } else {
+        checkInButton = null;
+      }
+    } catch (error) {
+      console.log("⚠️ 방법 1 실패:", error.message);
+    }
+    
+    // 방법 2: 클래스 기반으로 첫 번째 check-button 찾기 (백업)
     if (!checkInButton) {
-      throw new Error("출근 버튼을 찾을 수 없거나 이미 출근했습니다.");
+      try {
+        console.log("📝 방법 2: 첫 번째 'check-button' 클래스로 버튼 찾는 중...");
+        const checkButtons = await page.$$(".check-button");
+        if (checkButtons.length >= 1) {
+          checkInButton = checkButtons[0];
+          console.log("✅ 방법 2 성공: 첫 번째 check-button 발견!");
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 2 실패:", error.message);
+      }
+    }
+    
+    // 방법 3: 기존 클래스 방식 (하위 호환성)
+    if (!checkInButton) {
+      try {
+        console.log("📝 방법 3: 기존 'check-in-button' 클래스로 버튼 찾는 중...");
+        checkInButton = await page.$(".check-in-button:not(.disabled)");
+        if (checkInButton) {
+          console.log("✅ 방법 3 성공: 기존 check-in-button 발견!");
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 3 실패:", error.message);
+      }
+    }
+    
+    // 방법 4: 더 넓은 범위로 '출근' 포함 버튼 찾기
+    if (!checkInButton) {
+      try {
+        console.log("📝 방법 4: '출근' 텍스트 포함 모든 요소 찾는 중...");
+        checkInButton = await page.evaluateHandle(() => {
+          const elements = Array.from(document.querySelectorAll('*'));
+          return elements.find(el => 
+            el.textContent && 
+            el.textContent.trim().includes('출근') &&
+            (el.tagName === 'BUTTON' || el.onclick || el.getAttribute('role') === 'button' || 
+             el.style.cursor === 'pointer' || el.classList.contains('btn')) &&
+            !el.disabled &&
+            !el.classList.contains('disabled')
+          );
+        });
+        
+        if (checkInButton && await checkInButton.evaluate(el => el)) {
+          console.log("✅ 방법 4 성공: '출근' 포함 클릭 가능 요소 발견!");
+        } else {
+          checkInButton = null;
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 4 실패:", error.message);
+      }
     }
 
-    console.log("✅ 출근 버튼 발견! 클릭 중...");
-    await checkInButton.click();
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (!checkInButton) {
+      throw new Error("출근 버튼을 찾을 수 없거나 이미 출근했습니다. (모든 방법 실패)");
+    }
+
+    console.log("✅ 출근 버튼 발견! 클릭 시도 중...");
+    
+    // 클릭 전 버튼 상태 확인
+    try {
+      const buttonInfo = await checkInButton.evaluate(el => ({
+        text: el.textContent?.trim() || '',
+        disabled: el.disabled,
+        visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+        className: el.className || ''
+      }));
+      
+      console.log(`🔍 클릭 대상 버튼 정보: 텍스트="${buttonInfo.text}", 비활성화=${buttonInfo.disabled}, 보임=${buttonInfo.visible}`);
+      
+      if (buttonInfo.disabled) {
+        throw new Error(`출근 버튼이 비활성화 상태입니다: ${buttonInfo.text}`);
+      }
+      
+      if (!buttonInfo.visible) {
+        throw new Error(`출근 버튼이 화면에 보이지 않습니다: ${buttonInfo.text}`);
+      }
+      
+    } catch (error) {
+      console.error("⚠️ 버튼 상태 확인 실패:", error.message);
+    }
+    
+    // 안정적인 클릭 시도 (여러 방법)
+    let clickSuccess = false;
+    
+    // 방법 1: 일반 클릭
+    try {
+      console.log("🖱️ 방법 1: 일반 클릭 시도...");
+      await checkInButton.click();
+      clickSuccess = true;
+      console.log("✅ 방법 1 성공: 일반 클릭 완료!");
+    } catch (error) {
+      console.log("⚠️ 방법 1 실패:", error.message);
+    }
+    
+    // 방법 2: JavaScript 클릭 (백업)
+    if (!clickSuccess) {
+      try {
+        console.log("🖱️ 방법 2: JavaScript 클릭 시도...");
+        await checkInButton.evaluate(btn => btn.click());
+        clickSuccess = true;
+        console.log("✅ 방법 2 성공: JavaScript 클릭 완료!");
+      } catch (error) {
+        console.log("⚠️ 방법 2 실패:", error.message);
+      }
+    }
+    
+    // 방법 3: 마우스 클릭 (마지막 수단)
+    if (!clickSuccess) {
+      try {
+        console.log("🖱️ 방법 3: 마우스 포커스 후 클릭 시도...");
+        await checkInButton.hover();
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await checkInButton.click();
+        clickSuccess = true;
+        console.log("✅ 방법 3 성공: 마우스 클릭 완료!");
+      } catch (error) {
+        console.log("⚠️ 방법 3 실패:", error.message);
+      }
+    }
+    
+    if (!clickSuccess) {
+      throw new Error("모든 클릭 방법이 실패했습니다. 출근 버튼을 클릭할 수 없습니다.");
+    }
+    
+    console.log("⏳ 클릭 후 페이지 반응 대기 중...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
     // 출근 시간 추출
     const checkInTimeElement = await page.$(".check-time");
@@ -190,33 +336,319 @@ async function startCheckOut() {
     await doLogin(page);
 
     console.log("🔍 퇴근 버튼 탐색 중...");
-    await page.waitForSelector(".work-schedule-panel", { timeout: 8000 });
+    
+    // 페이지 로딩 대기 (work-schedule-panel 대신 더 일반적인 대기)
+    console.log("⏳ 페이지 로딩 대기 중...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    const checkOutButton = await page.$(".check-out-button:not(.disabled)");
+    let checkOutButton = null;
+    
+    // 방법 1: 텍스트 기반으로 '퇴근하기' 버튼 찾기 (가장 확실한 방법)
+    try {
+      console.log("📝 방법 1: '퇴근하기' 텍스트로 버튼 찾는 중...");
+      
+      // XPath를 사용해서 더 정확하게 찾기
+      const checkOutButtons = await page.$x("//button[contains(text(), '퇴근하기') and not(@disabled)]");
+      if (checkOutButtons.length > 0) {
+        checkOutButton = checkOutButtons[0];
+        console.log("✅ 방법 1 성공: XPath로 '퇴근하기' 버튼 발견!");
+      } else {
+        // 백업: evaluateHandle 방식
+        checkOutButton = await page.evaluateHandle(() => {
+          const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+          return buttons.find(btn => 
+            btn.textContent && 
+            btn.textContent.trim().includes('퇴근하기') &&
+            !btn.disabled &&
+            !btn.classList.contains('disabled')
+          );
+        });
+        
+        if (checkOutButton && await checkOutButton.evaluate(el => el)) {
+          console.log("✅ 방법 1 백업 성공: evaluateHandle로 '퇴근하기' 버튼 발견!");
+        } else {
+          checkOutButton = null;
+        }
+      }
+    } catch (error) {
+      console.log("⚠️ 방법 1 실패:", error.message);
+    }
+    
+    // 방법 2: 클래스와 텍스트 조합으로 정확히 찾기
     if (!checkOutButton) {
-      throw new Error("퇴근 버튼을 찾을 수 없거나 이미 퇴근했습니다.");
+      try {
+        console.log("📝 방법 2: check-button 클래스 + '퇴근' 텍스트 조합으로 찾는 중...");
+        
+        // XPath로 정확한 조건 설정
+        const buttons = await page.$x("//button[contains(@class, 'check-button') and contains(text(), '퇴근') and not(@disabled)]");
+        if (buttons.length > 0) {
+          checkOutButton = buttons[0];
+          console.log("✅ 방법 2 성공: XPath로 check-button + 퇴근 텍스트 버튼 발견!");
+        } else {
+          // 백업: 순서 기반 (두 번째 check-button)
+          const checkButtons = await page.$$(".check-button");
+          if (checkButtons.length >= 2) {
+            // 두 번째 버튼이 퇴근 버튼인지 텍스트로 확인
+            const buttonText = await page.evaluate(el => el.textContent?.trim() || '', checkButtons[1]);
+            if (buttonText.includes('퇴근')) {
+              checkOutButton = checkButtons[1];
+              console.log("✅ 방법 2 백업 성공: 두 번째 check-button이 퇴근 버튼 확인됨!");
+            }
+          }
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 2 실패:", error.message);
+      }
+    }
+    
+    // 방법 3: 기존 클래스 방식 (하위 호환성)
+    if (!checkOutButton) {
+      try {
+        console.log("📝 방법 3: 기존 'check-out-button' 클래스로 버튼 찾는 중...");
+        checkOutButton = await page.$(".check-out-button:not(.disabled)");
+        if (checkOutButton) {
+          console.log("✅ 방법 3 성공: 기존 check-out-button 발견!");
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 3 실패:", error.message);
+      }
+    }
+    
+    // 방법 4: 더 넓은 범위로 '퇴근' 포함 버튼 찾기
+    if (!checkOutButton) {
+      try {
+        console.log("📝 방법 4: '퇴근' 텍스트 포함 모든 클릭 가능 요소 찾는 중...");
+        
+        // XPath로 클릭 가능한 모든 퇴근 요소 찾기
+        const elements = await page.$x("//*[contains(text(), '퇴근') and (self::button or @onclick or @role='button' or contains(@class, 'btn')) and not(@disabled)]");
+        if (elements.length > 0) {
+          checkOutButton = elements[0];
+          console.log("✅ 방법 4 성공: XPath로 '퇴근' 포함 클릭 가능 요소 발견!");
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 4 실패:", error.message);
+      }
     }
 
-    console.log("✅ 퇴근 버튼 발견! 클릭 중...");
-    await checkOutButton.click();
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // 퇴근 시간 추출
-    const checkOutTimeElements = await page.$$(".check-time");
-    if (checkOutTimeElements.length >= 2) {
-      state.todaysCheckOutTime = await page.evaluate(el => el.textContent.trim(), checkOutTimeElements[1]);
-      console.log(`⏰ 퇴근 시간: ${state.todaysCheckOutTime}`);
+    // 버튼을 찾았는지 체크하고 상태 분석
+    if (!checkOutButton) {
+      console.log("🔍 퇴근 버튼 상태 분석 중...");
+      
+      // 모든 버튼을 확인해서 상황 파악
+      const buttonAnalysis = await page.evaluate(() => {
+        const allButtons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+        const result = {
+          totalButtons: allButtons.length,
+          checkoutButtons: [],
+          disabledCheckoutButtons: []
+        };
+        
+        allButtons.forEach((btn, index) => {
+          const text = btn.textContent?.trim() || '';
+          if (text.includes('퇴근')) {
+            const buttonInfo = {
+              index,
+              text,
+              disabled: btn.disabled || btn.classList.contains('disabled'),
+              visible: btn.offsetWidth > 0 && btn.offsetHeight > 0,
+              className: btn.className || ''
+            };
+            
+            if (buttonInfo.disabled) {
+              result.disabledCheckoutButtons.push(buttonInfo);
+            } else {
+              result.checkoutButtons.push(buttonInfo);
+            }
+          }
+        });
+        
+        return result;
+      });
+      
+      console.log("📊 버튼 분석 결과:", JSON.stringify(buttonAnalysis, null, 2));
+      
+      if (buttonAnalysis.disabledCheckoutButtons.length > 0) {
+        console.log("⚠️ 퇴근 버튼이 존재하지만 비활성화 상태입니다:");
+        buttonAnalysis.disabledCheckoutButtons.forEach((btn, idx) => {
+          console.log(`   ${idx + 1}. "${btn.text}" (클래스: ${btn.className})`);
+        });
+        throw new Error("이미 퇴근 처리가 완료되었습니다 (퇴근 버튼이 비활성화됨)");
+      } else if (buttonAnalysis.checkoutButtons.length === 0 && buttonAnalysis.disabledCheckoutButtons.length === 0) {
+        console.log("❌ 퇴근 버튼을 전혀 찾을 수 없습니다");
+        throw new Error("페이지에서 퇴근 버튼을 찾을 수 없습니다 (DOM에 퇴근 버튼 없음)");
+      } else {
+        console.log("🤔 예상치 못한 상황입니다");
+        throw new Error("퇴근 버튼 상태를 파악할 수 없습니다");
+      }
     }
 
-    console.log("🎉 퇴근 완료!");
-    showNotification("퇴근 완료", "두레이 자동 퇴근", `퇴근 시간: ${state.todaysCheckOutTime || '확인 중'}`);
+    console.log("✅ 퇴근 버튼 발견! 클릭 시도 중...");
+    
+    // 클릭 전 버튼 상태 확인
+    try {
+      const buttonInfo = await checkOutButton.evaluate(el => ({
+        text: el.textContent?.trim() || '',
+        disabled: el.disabled,
+        visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+        className: el.className || ''
+      }));
+      
+      console.log(`🔍 클릭 대상 버튼 정보: 텍스트="${buttonInfo.text}", 비활성화=${buttonInfo.disabled}, 보임=${buttonInfo.visible}`);
+      
+      if (buttonInfo.disabled) {
+        throw new Error(`퇴근 버튼이 비활성화 상태입니다: ${buttonInfo.text}`);
+      }
+      
+      if (!buttonInfo.visible) {
+        throw new Error(`퇴근 버튼이 화면에 보이지 않습니다: ${buttonInfo.text}`);
+      }
+      
+    } catch (error) {
+      console.error("⚠️ 버튼 상태 확인 실패:", error.message);
+    }
+    
+    // 안정적인 클릭 시도 (여러 방법)
+    let clickSuccess = false;
+    
+    // 방법 1: 일반 클릭
+    try {
+      console.log("🖱️ 방법 1: 일반 클릭 시도...");
+      await checkOutButton.click();
+      clickSuccess = true;
+      console.log("✅ 방법 1 성공: 일반 클릭 완료!");
+    } catch (error) {
+      console.log("⚠️ 방법 1 실패:", error.message);
+    }
+    
+    // 방법 2: JavaScript 클릭 (백업)
+    if (!clickSuccess) {
+      try {
+        console.log("🖱️ 방법 2: JavaScript 클릭 시도...");
+        await checkOutButton.evaluate(btn => btn.click());
+        clickSuccess = true;
+        console.log("✅ 방법 2 성공: JavaScript 클릭 완료!");
+      } catch (error) {
+        console.log("⚠️ 방법 2 실패:", error.message);
+      }
+    }
+    
+    // 방법 3: 마우스 클릭 (마지막 수단)
+    if (!clickSuccess) {
+      try {
+        console.log("🖱️ 방법 3: 마우스 포커스 후 클릭 시도...");
+        await checkOutButton.hover();
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await checkOutButton.click();
+        clickSuccess = true;
+        console.log("✅ 방법 3 성공: 마우스 클릭 완료!");
+      } catch (error) {
+        console.log("⚠️ 방법 3 실패:", error.message);
+      }
+    }
+    
+    if (!clickSuccess) {
+      throw new Error("모든 클릭 방법이 실패했습니다. 퇴근 버튼을 클릭할 수 없습니다.");
+    }
+    
+    console.log("⏳ 클릭 후 페이지 반응 대기 중...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
+    // 퇴근 시간 추출 (개선된 방식)
+    console.log("🕐 [실제조회] 출퇴근 시간 추출 시도...");
+    
+    let checkInTime = '미등록';
+    let checkOutTime = '미등록';
+    
+    try {
+      // 개선된 시간 추출 로직
+      console.log('📊 [실제조회] 개선된 시간 추출 방식 적용...');
+      
+      // 방법 1: 출근/퇴근 텍스트 주변에서 시간 찾기
+      const timesByContext = await page.evaluate(() => {
+        const result = { checkIn: null, checkOut: null };
+        
+        // 출근 시간 찾기
+        const checkinElement = Array.from(document.querySelectorAll('*')).find(el => 
+          el.textContent && el.textContent.includes('출근')
+        );
+        
+        if (checkinElement) {
+          const parent = checkinElement.closest('.attendance-check__item') || 
+                        checkinElement.closest('.check-item') ||
+                        checkinElement.parentElement;
+          if (parent) {
+            const timeElement = parent.querySelector('.check-time');
+            if (timeElement) {
+              result.checkIn = timeElement.textContent.trim();
+            }
+          }
+        }
+        
+        // 퇴근 시간 찾기
+        const checkoutElement = Array.from(document.querySelectorAll('*')).find(el => 
+          el.textContent && el.textContent.includes('퇴근')
+        );
+        
+        if (checkoutElement) {
+          const parent = checkoutElement.closest('.attendance-check__item') || 
+                        checkoutElement.closest('.check-item') ||
+                        checkoutElement.parentElement;
+          if (parent) {
+            const timeElement = parent.querySelector('.check-time');
+            if (timeElement) {
+              result.checkOut = timeElement.textContent.trim();
+            }
+          }
+        }
+        
+        return result;
+      });
+      
+      if (timesByContext.checkIn) {
+        checkInTime = timesByContext.checkIn;
+        console.log('✅ [실제조회] 출근 시간 추출 성공 (방법 1):', checkInTime);
+      }
+      
+      if (timesByContext.checkOut) {
+        checkOutTime = timesByContext.checkOut;
+        console.log('✅ [실제조회] 퇴근 시간 추출 성공 (방법 1):', checkOutTime);
+      }
+      
+      // 방법 2: 기존 방식 (백업)
+      if (!timesByContext.checkIn || !timesByContext.checkOut) {
+        console.log('📝 [실제조회] 방법 2: 기존 순서 기반 방식 시도...');
+        const timeElements = await page.$$('.check-time');
+        console.log(`📊 [실제조회] check-time 클래스 요소: ${timeElements.length}개 발견`);
+        
+        if (timeElements.length >= 1 && !timesByContext.checkIn) {
+          checkInTime = await page.evaluate(el => el.textContent.trim(), timeElements[0]);
+          console.log('✅ [실제조회] 출근 시간 추출 성공 (방법 2):', checkInTime);
+        }
+        
+        if (timeElements.length >= 2 && !timesByContext.checkOut) {
+          checkOutTime = await page.evaluate(el => el.textContent.trim(), timeElements[1]);
+          console.log('✅ [실제조회] 퇴근 시간 추출 성공 (방법 2):', checkOutTime);
+        } else if (timeElements.length === 1 && !timesByContext.checkOut) {
+          checkOutTime = '미등록';
+          console.log('📝 [실제조회] 퇴근 시간: 아직 퇴근 안 함');
+        }
+      }
+      
+    } catch (error) {
+      console.log('❌ [실제조회] 시간 추출 실패:', error.message);
+    }
+
+    console.log(`🎯 [실제조회] 최종 결과 - 출근: ${checkInTime}, 퇴근: ${checkOutTime}`);
+    
+    return { checkInTime, checkOutTime };
+    
   } catch (error) {
-    console.error("❌ 퇴근 자동화 실패:", error.message);
+    console.error('❌ [실제조회] 전체 실패:', error.message);
     throw error;
   } finally {
-    await browser.close();
-    state.isCheckoutInProgress = false;
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
@@ -240,17 +672,78 @@ async function getActualTimes() {
     let checkOutTime = '미등록';
     
     try {
-      const timeElements = await page.$$('.check-time');
-      console.log(`📊 [실제조회] check-time 클래스 요소: ${timeElements.length}개 발견`);
+      // 개선된 시간 추출 로직
+      console.log('📊 [실제조회] 개선된 시간 추출 방식 적용...');
       
-      if (timeElements.length >= 1) {
-        checkInTime = await page.evaluate(el => el.textContent.trim(), timeElements[0]);
-        console.log('✅ [실제조회] 출근 시간 추출 성공:', checkInTime);
+      // 방법 1: 출근/퇴근 텍스트 주변에서 시간 찾기
+      const timesByContext = await page.evaluate(() => {
+        const result = { checkIn: null, checkOut: null };
+        
+        // 출근 시간 찾기
+        const checkinElement = Array.from(document.querySelectorAll('*')).find(el => 
+          el.textContent && el.textContent.includes('출근')
+        );
+        
+        if (checkinElement) {
+          const parent = checkinElement.closest('.attendance-check__item') || 
+                        checkinElement.closest('.check-item') ||
+                        checkinElement.parentElement;
+          if (parent) {
+            const timeElement = parent.querySelector('.check-time');
+            if (timeElement) {
+              result.checkIn = timeElement.textContent.trim();
+            }
+          }
+        }
+        
+        // 퇴근 시간 찾기
+        const checkoutElement = Array.from(document.querySelectorAll('*')).find(el => 
+          el.textContent && el.textContent.includes('퇴근')
+        );
+        
+        if (checkoutElement) {
+          const parent = checkoutElement.closest('.attendance-check__item') || 
+                        checkoutElement.closest('.check-item') ||
+                        checkoutElement.parentElement;
+          if (parent) {
+            const timeElement = parent.querySelector('.check-time');
+            if (timeElement) {
+              result.checkOut = timeElement.textContent.trim();
+            }
+          }
+        }
+        
+        return result;
+      });
+      
+      if (timesByContext.checkIn) {
+        checkInTime = timesByContext.checkIn;
+        console.log('✅ [실제조회] 출근 시간 추출 성공 (방법 1):', checkInTime);
       }
       
-      if (timeElements.length >= 2) {
-        checkOutTime = await page.evaluate(el => el.textContent.trim(), timeElements[1]);
-        console.log('✅ [실제조회] 퇴근 시간 추출 성공:', checkOutTime);
+      if (timesByContext.checkOut) {
+        checkOutTime = timesByContext.checkOut;
+        console.log('✅ [실제조회] 퇴근 시간 추출 성공 (방법 1):', checkOutTime);
+      }
+      
+      // 방법 2: 기존 방식 (백업)
+      if (!timesByContext.checkIn || !timesByContext.checkOut) {
+        console.log('📝 [실제조회] 방법 2: 기존 순서 기반 방식 시도...');
+        const timeElements = await page.$$('.check-time');
+        console.log(`📊 [실제조회] check-time 클래스 요소: ${timeElements.length}개 발견`);
+        
+        if (timeElements.length >= 1 && !timesByContext.checkIn) {
+          checkInTime = await page.evaluate(el => el.textContent.trim(), timeElements[0]);
+          console.log('✅ [실제조회] 출근 시간 추출 성공 (방법 2):', checkInTime);
+        }
+        
+        if (timeElements.length >= 2 && !timesByContext.checkOut) {
+          checkOutTime = await page.evaluate(el => el.textContent.trim(), timeElements[1]);
+          console.log('✅ [실제조회] 퇴근 시간 추출 성공 (방법 2):', checkOutTime);
+        } else if (timeElements.length === 1 && !timesByContext.checkOut) {
+          checkOutTime = '미등록';
+          console.log('📝 [실제조회] 퇴근 시간: 아직 퇴근 안 함');
+        }
       }
       
     } catch (error) {
@@ -422,6 +915,96 @@ function scheduleMidnightReset() {
   console.log(`⏰ 다음 자정 리셋 예약됨: ${tomorrow.toLocaleString("ko-KR")}`);
 }
 
+// ===== 디버깅 함수 (페이지 구조 확인용) =====
+async function debugPageStructure() {
+  console.log("🔍 [디버그] 두레이 페이지 구조 분석 시작...");
+  const browser = await createBrowser(false); // headless false로 브라우저 보이게
+  const page = await browser.newPage();
+
+  try {
+    await doLogin(page);
+    
+    console.log("🔍 [디버그] 로그인 완료, 페이지 분석 중...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // 1. 페이지 전체 클래스들 확인
+    const allClasses = await page.evaluate(() => {
+      const elements = document.querySelectorAll('*[class]');
+      const classes = new Set();
+      elements.forEach(el => {
+        el.className.split(' ').forEach(cls => {
+          if (cls.trim()) classes.add(cls.trim());
+        });
+      });
+      return Array.from(classes).sort();
+    });
+    
+    console.log("📋 [디버그] 페이지에 있는 모든 클래스들:");
+    allClasses.forEach(cls => {
+      if (cls.includes('work') || cls.includes('schedule') || cls.includes('panel') || 
+          cls.includes('check') || cls.includes('button')) {
+        console.log(`  🎯 관련 클래스: ${cls}`);
+      }
+    });
+    
+    // 2. 버튼 요소들 확인  
+    const buttons = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+      return btns.map(btn => ({
+        text: btn.textContent?.trim() || '',
+        className: btn.className || '',
+        id: btn.id || '',
+        disabled: btn.disabled,
+        tagName: btn.tagName
+      })).filter(btn => 
+        btn.text.includes('출근') || btn.text.includes('퇴근') || 
+        btn.className.includes('check') || btn.text.includes('등록')
+      );
+    });
+    
+    console.log("🔘 [디버그] 출퇴근 관련 버튼들:");
+    buttons.forEach((btn, idx) => {
+      console.log(`  ${idx + 1}. 텍스트: "${btn.text}"`);
+      console.log(`     클래스: "${btn.className}"`);
+      console.log(`     ID: "${btn.id}"`);
+      console.log(`     비활성화: ${btn.disabled}`);
+      console.log(`     태그: ${btn.tagName}`);
+      console.log("");
+    });
+    
+    // 3. 시간 표시 요소들 확인
+    const timeElements = await page.evaluate(() => {
+      const times = Array.from(document.querySelectorAll('*'));
+      return times.filter(el => {
+        const text = el.textContent?.trim() || '';
+        return /\d{2}:\d{2}:\d{2}/.test(text) || text.includes('시간') || text.includes('등록');
+      }).map(el => ({
+        text: el.textContent?.trim() || '',
+        className: el.className || '',
+        tagName: el.tagName
+      })).slice(0, 10); // 최대 10개만
+    });
+    
+    console.log("⏰ [디버그] 시간 관련 요소들:");
+    timeElements.forEach((time, idx) => {
+      console.log(`  ${idx + 1}. 텍스트: "${time.text}"`);
+      console.log(`     클래스: "${time.className}"`);
+      console.log(`     태그: ${time.tagName}`);
+      console.log("");
+    });
+    
+    console.log("🎯 [디버그] 분석 완료!");
+    
+  } catch (error) {
+    console.error("❌ [디버그] 분석 실패:", error.message);
+  } finally {
+    // 5초 후 브라우저 닫기
+    setTimeout(async () => {
+      await browser.close();
+    }, 5000);
+  }
+}
+
 // ===== API 라우트 =====
 
 // 미들웨어
@@ -491,6 +1074,24 @@ app.get('/health', (req, res) => {
   }, 'Server is running');
 });
 
+// 디버깅 API (페이지 구조 분석)
+app.get('/debug', async (req, res) => {
+  console.log('▶︎ [API] GET /debug 호출됨 - 페이지 구조 분석 시작');
+  try {
+    // 비동기로 디버깅 실행 (응답은 바로 보냄)
+    debugPageStructure().catch(err => {
+      console.error('❌ [디버그] 비동기 분석 실패:', err.message);
+    });
+    
+    sendSuccess(res, { 
+      message: '디버깅 시작됨', 
+      note: '브라우저가 열리고 로그에서 결과 확인 가능' 
+    }, '페이지 구조 분석 시작');
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 // 404 핸들러
 app.use((req, res) => {
   res.status(404).json({
@@ -501,7 +1102,8 @@ app.use((req, res) => {
       'POST /check-out', 
       'GET /status',
       'GET /actual-times',
-      'GET /health'
+      'GET /health',
+      'GET /debug'
     ]
   });
 });
@@ -528,6 +1130,7 @@ function startApiServer() {
     console.log('   GET  /status      - 상태 조회 (캐시)');
     console.log('   GET  /actual-times - 실제 출퇴근 시간 조회');
     console.log('   GET  /health      - 헬스체크');
+    console.log('   GET  /debug       - 페이지 구조 분석');
   });
 }
 
