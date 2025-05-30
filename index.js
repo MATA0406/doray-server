@@ -226,6 +226,26 @@ async function startCheckIn() {
         console.log("⚠️ 방법 4 실패:", error.message);
       }
     }
+    
+    // 방법 5: Spread operator로 button.check-button에서 출근 텍스트 찾기 (사용자 제안 로직)
+    if (!checkInButton) {
+      try {
+        console.log("📝 방법 5: button.check-button 클래스에서 '출근' 텍스트 찾는 중...");
+        checkInButton = await page.evaluateHandle(() => {
+          return [...document.querySelectorAll("button.check-button")].find((btn) =>
+            btn.textContent.includes("출근")
+          );
+        });
+        
+        if (checkInButton && await checkInButton.evaluate(el => el)) {
+          console.log("✅ 방법 5 성공: button.check-button에서 '출근' 텍스트 버튼 발견!");
+        } else {
+          checkInButton = null;
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 5 실패:", error.message);
+      }
+    }
 
     if (!checkInButton) {
       throw new Error("출근 버튼을 찾을 수 없거나 이미 출근했습니다. (모든 방법 실패)");
@@ -427,6 +447,26 @@ async function startCheckOut() {
         }
       } catch (error) {
         console.log("⚠️ 방법 4 실패:", error.message);
+      }
+    }
+    
+    // 방법 5: Spread operator로 button.check-button에서 퇴근 텍스트 찾기 (사용자 제안 로직)
+    if (!checkOutButton) {
+      try {
+        console.log("📝 방법 5: button.check-button 클래스에서 '퇴근' 텍스트 찾는 중...");
+        checkOutButton = await page.evaluateHandle(() => {
+          return [...document.querySelectorAll("button.check-button")].find((btn) =>
+            btn.textContent.includes("퇴근")
+          );
+        });
+        
+        if (checkOutButton && await checkOutButton.evaluate(el => el)) {
+          console.log("✅ 방법 5 성공: button.check-button에서 '퇴근' 텍스트 버튼 발견!");
+        } else {
+          checkOutButton = null;
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 5 실패:", error.message);
       }
     }
 
