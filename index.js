@@ -152,21 +152,17 @@ async function startCheckIn() {
 
     let checkInButton = null;
     
-    // 방법 1: 텍스트 기반으로 '출근하기' 버튼 찾기
+    // 방법 1: button.check-button 클래스에서 '출근' 텍스트 찾기 (우선순위 최고)
     try {
-      console.log("📝 방법 1: '출근하기' 텍스트로 버튼 찾는 중...");
+      console.log("📝 방법 1: button.check-button 클래스에서 '출근' 텍스트 찾는 중...");
       checkInButton = await page.evaluateHandle(() => {
-        const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
-        return buttons.find(btn => 
-          btn.textContent && 
-          btn.textContent.trim().includes('출근하기') &&
-          !btn.disabled &&
-          !btn.classList.contains('disabled')
+        return [...document.querySelectorAll("button.check-button")].find((btn) =>
+          btn.textContent.includes("출근")
         );
       });
       
       if (checkInButton && await checkInButton.evaluate(el => el)) {
-        console.log("✅ 방법 1 성공: '출근하기' 텍스트 버튼 발견!");
+        console.log("✅ 방법 1 성공: button.check-button에서 '출근' 텍스트 버튼 발견!");
       } else {
         checkInButton = null;
       }
@@ -174,37 +170,61 @@ async function startCheckIn() {
       console.log("⚠️ 방법 1 실패:", error.message);
     }
     
-    // 방법 2: 클래스 기반으로 첫 번째 check-button 찾기 (백업)
+    // 방법 2: 텍스트 기반으로 '출근하기' 버튼 찾기
     if (!checkInButton) {
       try {
-        console.log("📝 방법 2: 첫 번째 'check-button' 클래스로 버튼 찾는 중...");
-        const checkButtons = await page.$$(".check-button");
-        if (checkButtons.length >= 1) {
-          checkInButton = checkButtons[0];
-          console.log("✅ 방법 2 성공: 첫 번째 check-button 발견!");
+        console.log("📝 방법 2: '출근하기' 텍스트로 버튼 찾는 중...");
+        checkInButton = await page.evaluateHandle(() => {
+          const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+          return buttons.find(btn => 
+            btn.textContent && 
+            btn.textContent.trim().includes('출근하기') &&
+            !btn.disabled &&
+            !btn.classList.contains('disabled')
+          );
+        });
+        
+        if (checkInButton && await checkInButton.evaluate(el => el)) {
+          console.log("✅ 방법 2 성공: '출근하기' 텍스트 버튼 발견!");
+        } else {
+          checkInButton = null;
         }
       } catch (error) {
         console.log("⚠️ 방법 2 실패:", error.message);
       }
     }
     
-    // 방법 3: 기존 클래스 방식 (하위 호환성)
+    // 방법 3: 클래스 기반으로 첫 번째 check-button 찾기 (백업)
     if (!checkInButton) {
       try {
-        console.log("📝 방법 3: 기존 'check-in-button' 클래스로 버튼 찾는 중...");
-        checkInButton = await page.$(".check-in-button:not(.disabled)");
-        if (checkInButton) {
-          console.log("✅ 방법 3 성공: 기존 check-in-button 발견!");
+        console.log("📝 방법 3: 첫 번째 'check-button' 클래스로 버튼 찾는 중...");
+        const checkButtons = await page.$$(".check-button");
+        if (checkButtons.length >= 1) {
+          checkInButton = checkButtons[0];
+          console.log("✅ 방법 3 성공: 첫 번째 check-button 발견!");
         }
       } catch (error) {
         console.log("⚠️ 방법 3 실패:", error.message);
       }
     }
     
-    // 방법 4: 더 넓은 범위로 '출근' 포함 버튼 찾기
+    // 방법 4: 기존 클래스 방식 (하위 호환성)
     if (!checkInButton) {
       try {
-        console.log("📝 방법 4: '출근' 텍스트 포함 모든 요소 찾는 중...");
+        console.log("📝 방법 4: 기존 'check-in-button' 클래스로 버튼 찾는 중...");
+        checkInButton = await page.$(".check-in-button:not(.disabled)");
+        if (checkInButton) {
+          console.log("✅ 방법 4 성공: 기존 check-in-button 발견!");
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 4 실패:", error.message);
+      }
+    }
+    
+    // 방법 5: 더 넓은 범위로 '출근' 포함 버튼 찾기
+    if (!checkInButton) {
+      try {
+        console.log("📝 방법 5: '출근' 텍스트 포함 모든 요소 찾는 중...");
         checkInButton = await page.evaluateHandle(() => {
           const elements = Array.from(document.querySelectorAll('*'));
           return elements.find(el => 
@@ -218,27 +238,7 @@ async function startCheckIn() {
         });
         
         if (checkInButton && await checkInButton.evaluate(el => el)) {
-          console.log("✅ 방법 4 성공: '출근' 포함 클릭 가능 요소 발견!");
-        } else {
-          checkInButton = null;
-        }
-      } catch (error) {
-        console.log("⚠️ 방법 4 실패:", error.message);
-      }
-    }
-    
-    // 방법 5: Spread operator로 button.check-button에서 출근 텍스트 찾기 (사용자 제안 로직)
-    if (!checkInButton) {
-      try {
-        console.log("📝 방법 5: button.check-button 클래스에서 '출근' 텍스트 찾는 중...");
-        checkInButton = await page.evaluateHandle(() => {
-          return [...document.querySelectorAll("button.check-button")].find((btn) =>
-            btn.textContent.includes("출근")
-          );
-        });
-        
-        if (checkInButton && await checkInButton.evaluate(el => el)) {
-          console.log("✅ 방법 5 성공: button.check-button에서 '출근' 텍스트 버튼 발견!");
+          console.log("✅ 방법 5 성공: '출근' 포함 클릭 가능 요소 발견!");
         } else {
           checkInButton = null;
         }
@@ -363,47 +363,67 @@ async function startCheckOut() {
 
     let checkOutButton = null;
     
-    // 방법 1: 텍스트 기반으로 '퇴근하기' 버튼 찾기 (가장 확실한 방법)
+    // 방법 1: button.check-button 클래스에서 '퇴근' 텍스트 찾기 (우선순위 최고)
     try {
-      console.log("📝 방법 1: '퇴근하기' 텍스트로 버튼 찾는 중...");
+      console.log("📝 방법 1: button.check-button 클래스에서 '퇴근' 텍스트 찾는 중...");
+      checkOutButton = await page.evaluateHandle(() => {
+        return [...document.querySelectorAll("button.check-button")].find((btn) =>
+          btn.textContent.includes("퇴근")
+        );
+      });
       
-      // XPath를 사용해서 더 정확하게 찾기
-      const checkOutButtons = await page.$x("//button[contains(text(), '퇴근하기') and not(@disabled)]");
-      if (checkOutButtons.length > 0) {
-        checkOutButton = checkOutButtons[0];
-        console.log("✅ 방법 1 성공: XPath로 '퇴근하기' 버튼 발견!");
+      if (checkOutButton && await checkOutButton.evaluate(el => el)) {
+        console.log("✅ 방법 1 성공: button.check-button에서 '퇴근' 텍스트 버튼 발견!");
       } else {
-        // 백업: evaluateHandle 방식
-        checkOutButton = await page.evaluateHandle(() => {
-          const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
-          return buttons.find(btn => 
-            btn.textContent && 
-            btn.textContent.trim().includes('퇴근하기') &&
-            !btn.disabled &&
-            !btn.classList.contains('disabled')
-          );
-        });
-        
-        if (checkOutButton && await checkOutButton.evaluate(el => el)) {
-          console.log("✅ 방법 1 백업 성공: evaluateHandle로 '퇴근하기' 버튼 발견!");
-        } else {
-          checkOutButton = null;
-        }
+        checkOutButton = null;
       }
     } catch (error) {
       console.log("⚠️ 방법 1 실패:", error.message);
     }
     
-    // 방법 2: 클래스와 텍스트 조합으로 정확히 찾기
+    // 방법 2: 텍스트 기반으로 '퇴근하기' 버튼 찾기 (가장 확실한 방법)
     if (!checkOutButton) {
       try {
-        console.log("📝 방법 2: check-button 클래스 + '퇴근' 텍스트 조합으로 찾는 중...");
+        console.log("📝 방법 2: '퇴근하기' 텍스트로 버튼 찾는 중...");
+        
+        // XPath를 사용해서 더 정확하게 찾기
+        const checkOutButtons = await page.$x("//button[contains(text(), '퇴근하기') and not(@disabled)]");
+        if (checkOutButtons.length > 0) {
+          checkOutButton = checkOutButtons[0];
+          console.log("✅ 방법 2 성공: XPath로 '퇴근하기' 버튼 발견!");
+        } else {
+          // 백업: evaluateHandle 방식
+          checkOutButton = await page.evaluateHandle(() => {
+            const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+            return buttons.find(btn => 
+              btn.textContent && 
+              btn.textContent.trim().includes('퇴근하기') &&
+              !btn.disabled &&
+              !btn.classList.contains('disabled')
+            );
+          });
+          
+          if (checkOutButton && await checkOutButton.evaluate(el => el)) {
+            console.log("✅ 방법 2 백업 성공: evaluateHandle로 '퇴근하기' 버튼 발견!");
+          } else {
+            checkOutButton = null;
+          }
+        }
+      } catch (error) {
+        console.log("⚠️ 방법 2 실패:", error.message);
+      }
+    }
+    
+    // 방법 3: 클래스와 텍스트 조합으로 정확히 찾기
+    if (!checkOutButton) {
+      try {
+        console.log("📝 방법 3: check-button 클래스 + '퇴근' 텍스트 조합으로 찾는 중...");
         
         // XPath로 정확한 조건 설정
         const buttons = await page.$x("//button[contains(@class, 'check-button') and contains(text(), '퇴근') and not(@disabled)]");
         if (buttons.length > 0) {
           checkOutButton = buttons[0];
-          console.log("✅ 방법 2 성공: XPath로 check-button + 퇴근 텍스트 버튼 발견!");
+          console.log("✅ 방법 3 성공: XPath로 check-button + 퇴근 텍스트 버튼 발견!");
         } else {
           // 백업: 순서 기반 (두 번째 check-button)
           const checkButtons = await page.$$(".check-button");
@@ -412,58 +432,38 @@ async function startCheckOut() {
             const buttonText = await page.evaluate(el => el.textContent?.trim() || '', checkButtons[1]);
             if (buttonText.includes('퇴근')) {
               checkOutButton = checkButtons[1];
-              console.log("✅ 방법 2 백업 성공: 두 번째 check-button이 퇴근 버튼 확인됨!");
+              console.log("✅ 방법 3 백업 성공: 두 번째 check-button이 퇴근 버튼 확인됨!");
             }
           }
-        }
-      } catch (error) {
-        console.log("⚠️ 방법 2 실패:", error.message);
-      }
-    }
-    
-    // 방법 3: 기존 클래스 방식 (하위 호환성)
-    if (!checkOutButton) {
-      try {
-        console.log("📝 방법 3: 기존 'check-out-button' 클래스로 버튼 찾는 중...");
-        checkOutButton = await page.$(".check-out-button:not(.disabled)");
-        if (checkOutButton) {
-          console.log("✅ 방법 3 성공: 기존 check-out-button 발견!");
         }
       } catch (error) {
         console.log("⚠️ 방법 3 실패:", error.message);
       }
     }
     
-    // 방법 4: 더 넓은 범위로 '퇴근' 포함 버튼 찾기
+    // 방법 4: 기존 클래스 방식 (하위 호환성)
     if (!checkOutButton) {
       try {
-        console.log("📝 방법 4: '퇴근' 텍스트 포함 모든 클릭 가능 요소 찾는 중...");
-        
-        // XPath로 클릭 가능한 모든 퇴근 요소 찾기
-        const elements = await page.$x("//*[contains(text(), '퇴근') and (self::button or @onclick or @role='button' or contains(@class, 'btn')) and not(@disabled)]");
-        if (elements.length > 0) {
-          checkOutButton = elements[0];
-          console.log("✅ 방법 4 성공: XPath로 '퇴근' 포함 클릭 가능 요소 발견!");
+        console.log("📝 방법 4: 기존 'check-out-button' 클래스로 버튼 찾는 중...");
+        checkOutButton = await page.$(".check-out-button:not(.disabled)");
+        if (checkOutButton) {
+          console.log("✅ 방법 4 성공: 기존 check-out-button 발견!");
         }
       } catch (error) {
         console.log("⚠️ 방법 4 실패:", error.message);
       }
     }
     
-    // 방법 5: Spread operator로 button.check-button에서 퇴근 텍스트 찾기 (사용자 제안 로직)
+    // 방법 5: 더 넓은 범위로 '퇴근' 포함 버튼 찾기
     if (!checkOutButton) {
       try {
-        console.log("📝 방법 5: button.check-button 클래스에서 '퇴근' 텍스트 찾는 중...");
-        checkOutButton = await page.evaluateHandle(() => {
-          return [...document.querySelectorAll("button.check-button")].find((btn) =>
-            btn.textContent.includes("퇴근")
-          );
-        });
+        console.log("📝 방법 5: '퇴근' 텍스트 포함 모든 클릭 가능 요소 찾는 중...");
         
-        if (checkOutButton && await checkOutButton.evaluate(el => el)) {
-          console.log("✅ 방법 5 성공: button.check-button에서 '퇴근' 텍스트 버튼 발견!");
-        } else {
-          checkOutButton = null;
+        // XPath로 클릭 가능한 모든 퇴근 요소 찾기
+        const elements = await page.$x("//*[contains(text(), '퇴근') and (self::button or @onclick or @role='button' or contains(@class, 'btn')) and not(@disabled)]");
+        if (elements.length > 0) {
+          checkOutButton = elements[0];
+          console.log("✅ 방법 5 성공: XPath로 '퇴근' 포함 클릭 가능 요소 발견!");
         }
       } catch (error) {
         console.log("⚠️ 방법 5 실패:", error.message);
