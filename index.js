@@ -135,6 +135,331 @@ async function doLogin(page) {
   console.log("✅ 로그인 성공!");
 }
 
+// ===== 공통 유틸리티 함수들 =====
+
+/**
+ * 버튼 찾기 - 5가지 방법으로 안전하게 버튼을 찾는 공통 함수
+ * @param {Object} page - Puppeteer 페이지 객체
+ * @param {string} buttonType - '출근' 또는 '퇴근'
+ * @returns {Object|null} - 찾은 버튼 또는 null
+ */
+async function findAttendanceButton(page, buttonType) {
+  let button = null;
+  const isCheckIn = buttonType === '출근';
+  
+  // 방법 1: button.check-button 클래스에서 텍스트 찾기 (우선순위 최고)
+  try {
+    console.log(`📝 방법 1: button.check-button 클래스에서 '${buttonType}' 텍스트 찾는 중...`);
+    button = await page.evaluateHandle((type) => {
+      return [...document.querySelectorAll("button.check-button")].find((btn) =>
+        btn.textContent.includes(type)
+      );
+    }, buttonType);
+    
+    if (button && await button.evaluate(el => el)) {
+      console.log(`✅ 방법 1 성공: button.check-button에서 '${buttonType}' 텍스트 버튼 발견!`);
+      return button;
+    } else {
+      button = null;
+    }
+  } catch (error) {
+    console.log("⚠️ 방법 1 실패:", error.message);
+  }
+  
+  // 방법 2: 텍스트 기반으로 정확한 버튼명 찾기
+  if (!button) {
+    try {
+      const exactText = isCheckIn ? '출근하기' : '퇴근하기';
+      console.log(`📝 방법 2: '${exactText}' 텍스트로 버튼 찾는 중...`);
+      
+      if (!isCheckIn) {
+        // 퇴근의 경우 XPath 먼저 시도
+        const buttons = await page.$x(`//button[contains(text(), '${exactText}') and not(@disabled)]`);
+        if (buttons.length > 0) {
+          button = buttons[0];
+          console.log(`✅ 방법 2 성공: XPath로 '${exactText}' 버튼 발견!`);
+          return button;
+        }
+      }
+      
+      // 백업: evaluateHandle 방식
+      button = await page.evaluateHandle((text) => {
+        const buttons = Array.from(document.querySelectorAll('button, .btn, [role="button"]'));
+        return buttons.find(btn => 
+          btn.textContent && 
+          btn.textContent.trim().includes(text) &&
+          !btn.disabled &&
+          !btn.classList.contains('disabled')
+        );
+      }, exactText);
+      
+      if (button && await button.evaluate(el => el)) {
+        console.log(`✅ 방법 2 백업 성공: evaluateHandle로 '${exactText}' 버튼 발견!`);
+        return button;
+      } else {
+        button = null;
+      }
+    } catch (error) {
+      console.log("⚠️ 방법 2 실패:", error.message);
+    }
+  }
+  
+  // 방법 3: 클래스 기반 찾기
+  if (!button) {
+    try {
+      if (isCheckIn) {
+        console.log("📝 방법 3: 첫 번째 'check-button' 클래스로 버튼 찾는 중...");
+        const checkButtons = await page.$$(".check-button");
+        if (checkButtons.length >= 1) {
+          button = checkButtons[0];
+          console.log("✅ 방법 3 성공: 첫 번째 check-button 발견!");
+          return button;
+        }
+      } else {
+        console.log("📝 방법 3: check-button 클래스 + '퇴근' 텍스트 조합으로 찾는 중...");
+        const buttons = await page.$x("//button[contains(@class, 'check-button') and contains(text(), '퇴근') and not(@disabled)]");
+        if (buttons.length > 0) {
+          button = buttons[0];
+          console.log("✅ 방법 3 성공: XPath로 check-button + 퇴근 텍스트 버튼 발견!");
+          return button;
+        } else {
+          // 백업: 순서 기반 (두 번째 check-button)
+          const checkButtons = await page.$$(".check-button");
+          if (checkButtons.length >= 2) {
+            const buttonText = await page.evaluate(el => el.textContent?.trim() || '', checkButtons[1]);
+            if (buttonText.includes('퇴근')) {
+              button = checkButtons[1];
+              console.log("✅ 방법 3 백업 성공: 두 번째 check-button이 퇴근 버튼 확인됨!");
+              return button;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.log("⚠️ 방법 3 실패:", error.message);
+    }
+  }
+  
+  // 방법 4: 기존 클래스 방식 (하위 호환성)
+  if (!button) {
+    try {
+      const className = isCheckIn ? '.check-in-button:not(.disabled)' : '.check-out-button:not(.disabled)';
+      const buttonName = isCheckIn ? 'check-in-button' : 'check-out-button';
+      console.log(`📝 방법 4: 기존 '${buttonName}' 클래스로 버튼 찾는 중...`);
+      button = await page.$(className);
+      if (button) {
+        console.log(`✅ 방법 4 성공: 기존 ${buttonName} 발견!`);
+        return button;
+      }
+    } catch (error) {
+      console.log("⚠️ 방법 4 실패:", error.message);
+    }
+  }
+  
+  // 방법 5: 더 넓은 범위로 찾기
+  if (!button) {
+    try {
+      console.log(`📝 방법 5: '${buttonType}' 텍스트 포함 모든 클릭 가능 요소 찾는 중...`);
+      
+      if (!isCheckIn) {
+        // 퇴근의 경우 XPath 사용
+        const elements = await page.$x(`//*[contains(text(), '${buttonType}') and (self::button or @onclick or @role='button' or contains(@class, 'btn')) and not(@disabled)]`);
+        if (elements.length > 0) {
+          button = elements[0];
+          console.log(`✅ 방법 5 성공: XPath로 '${buttonType}' 포함 클릭 가능 요소 발견!`);
+          return button;
+        }
+      } else {
+        // 출근의 경우 기존 방식
+        button = await page.evaluateHandle((type) => {
+          const elements = Array.from(document.querySelectorAll('*'));
+          return elements.find(el => 
+            el.textContent && 
+            el.textContent.trim().includes(type) &&
+            (el.tagName === 'BUTTON' || el.onclick || el.getAttribute('role') === 'button' || 
+             el.style.cursor === 'pointer' || el.classList.contains('btn')) &&
+            !el.disabled &&
+            !el.classList.contains('disabled')
+          );
+        }, buttonType);
+        
+        if (button && await button.evaluate(el => el)) {
+          console.log(`✅ 방법 5 성공: '${buttonType}' 포함 클릭 가능 요소 발견!`);
+          return button;
+        }
+      }
+    } catch (error) {
+      console.log("⚠️ 방법 5 실패:", error.message);
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 버튼 클릭 시도 - 3가지 방법으로 안전하게 클릭하는 공통 함수
+ * @param {Object} button - 클릭할 버튼 객체
+ * @param {string} buttonType - '출근' 또는 '퇴근' (로그용)
+ * @returns {boolean} - 클릭 성공 여부
+ */
+async function tryClickButton(button, buttonType) {
+  // 클릭 전 버튼 상태 확인
+  try {
+    const buttonInfo = await button.evaluate(el => ({
+      text: el.textContent?.trim() || '',
+      disabled: el.disabled,
+      visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+      className: el.className || ''
+    }));
+    
+    console.log(`🔍 클릭 대상 버튼 정보: 텍스트="${buttonInfo.text}", 비활성화=${buttonInfo.disabled}, 보임=${buttonInfo.visible}`);
+    
+    if (buttonInfo.disabled) {
+      throw new Error(`${buttonType} 버튼이 비활성화 상태입니다: ${buttonInfo.text}`);
+    }
+    
+    if (!buttonInfo.visible) {
+      throw new Error(`${buttonType} 버튼이 화면에 보이지 않습니다: ${buttonInfo.text}`);
+    }
+    
+  } catch (error) {
+    console.error("⚠️ 버튼 상태 확인 실패:", error.message);
+  }
+  
+  // 안정적인 클릭 시도 (여러 방법)
+  let clickSuccess = false;
+  
+  // 방법 1: 일반 클릭
+  try {
+    console.log("🖱️ 방법 1: 일반 클릭 시도...");
+    await button.click();
+    clickSuccess = true;
+    console.log("✅ 방법 1 성공: 일반 클릭 완료!");
+  } catch (error) {
+    console.log("⚠️ 방법 1 실패:", error.message);
+  }
+  
+  // 방법 2: JavaScript 클릭 (백업)
+  if (!clickSuccess) {
+    try {
+      console.log("🖱️ 방법 2: JavaScript 클릭 시도...");
+      await button.evaluate(btn => btn.click());
+      clickSuccess = true;
+      console.log("✅ 방법 2 성공: JavaScript 클릭 완료!");
+    } catch (error) {
+      console.log("⚠️ 방법 2 실패:", error.message);
+    }
+  }
+  
+  // 방법 3: 마우스 클릭 (마지막 수단)
+  if (!clickSuccess) {
+    try {
+      console.log("🖱️ 방법 3: 마우스 포커스 후 클릭 시도...");
+      await button.hover();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await button.click();
+      clickSuccess = true;
+      console.log("✅ 방법 3 성공: 마우스 클릭 완료!");
+    } catch (error) {
+      console.log("⚠️ 방법 3 실패:", error.message);
+    }
+  }
+  
+  return clickSuccess;
+}
+
+/**
+ * 출퇴근 시간 추출 - 페이지에서 시간 정보를 안전하게 추출하는 공통 함수
+ * @param {Object} page - Puppeteer 페이지 객체
+ * @returns {Object} - {checkInTime, checkOutTime}
+ */
+async function extractAttendanceTimes(page) {
+  console.log("🕐 출퇴근 시간 추출 시도...");
+  
+  let checkInTime = '미등록';
+  let checkOutTime = '미등록';
+  
+  try {
+    // 방법 1: 출근/퇴근 텍스트 주변에서 시간 찾기
+    const timesByContext = await page.evaluate(() => {
+      const result = { checkIn: null, checkOut: null };
+      
+      // 출근 시간 찾기
+      const checkinElement = Array.from(document.querySelectorAll('*')).find(el => 
+        el.textContent && el.textContent.includes('출근')
+      );
+      
+      if (checkinElement) {
+        const parent = checkinElement.closest('.attendance-check__item') || 
+                      checkinElement.closest('.check-item') ||
+                      checkinElement.parentElement;
+        if (parent) {
+          const timeElement = parent.querySelector('.check-time');
+          if (timeElement) {
+            result.checkIn = timeElement.textContent.trim();
+          }
+        }
+      }
+      
+      // 퇴근 시간 찾기
+      const checkoutElement = Array.from(document.querySelectorAll('*')).find(el => 
+        el.textContent && el.textContent.includes('퇴근')
+      );
+      
+      if (checkoutElement) {
+        const parent = checkoutElement.closest('.attendance-check__item') || 
+                      checkoutElement.closest('.check-item') ||
+                      checkoutElement.parentElement;
+        if (parent) {
+          const timeElement = parent.querySelector('.check-time');
+          if (timeElement) {
+            result.checkOut = timeElement.textContent.trim();
+          }
+        }
+      }
+      
+      return result;
+    });
+    
+    if (timesByContext.checkIn) {
+      checkInTime = timesByContext.checkIn;
+      console.log('✅ 출근 시간 추출 성공 (방법 1):', checkInTime);
+    }
+    
+    if (timesByContext.checkOut) {
+      checkOutTime = timesByContext.checkOut;
+      console.log('✅ 퇴근 시간 추출 성공 (방법 1):', checkOutTime);
+    }
+    
+    // 방법 2: 기존 방식 (백업)
+    if (!timesByContext.checkIn || !timesByContext.checkOut) {
+      console.log('📝 방법 2: 기존 순서 기반 방식 시도...');
+      const timeElements = await page.$$('.check-time');
+      console.log(`📊 check-time 클래스 요소: ${timeElements.length}개 발견`);
+      
+      if (timeElements.length >= 1 && !timesByContext.checkIn) {
+        checkInTime = await page.evaluate(el => el.textContent.trim(), timeElements[0]);
+        console.log('✅ 출근 시간 추출 성공 (방법 2):', checkInTime);
+      }
+      
+      if (timeElements.length >= 2 && !timesByContext.checkOut) {
+        checkOutTime = await page.evaluate(el => el.textContent.trim(), timeElements[1]);
+        console.log('✅ 퇴근 시간 추출 성공 (방법 2):', checkOutTime);
+      } else if (timeElements.length === 1 && !timesByContext.checkOut) {
+        checkOutTime = '미등록';
+        console.log('📝 퇴근 시간: 아직 퇴근 안 함');
+      }
+    }
+    
+  } catch (error) {
+    console.log('❌ 시간 추출 실패:', error.message);
+  }
+  
+  console.log(`🎯 최종 결과 - 출근: ${checkInTime}, 퇴근: ${checkOutTime}`);
+  
+  return { checkInTime, checkOutTime };
+}
+
 // ===== 출근 처리 =====
 async function startCheckIn() {
   console.log("🚀 출근 자동화 시작...");
@@ -706,93 +1031,12 @@ async function getActualTimes() {
     console.log('⏳ [실제조회] 페이지 로딩 대기...');
     await new Promise(resolve => setTimeout(resolve, 3000));
     
-    console.log('🕐 [실제조회] 출퇴근 시간 추출 시도...');
+    // 공통 함수 사용으로 간소화
+    const times = await extractAttendanceTimes(page);
     
-    let checkInTime = '미등록';
-    let checkOutTime = '미등록';
+    console.log(`🎯 [실제조회] 최종 결과 - 출근: ${times.checkInTime}, 퇴근: ${times.checkOutTime}`);
     
-    try {
-      // 개선된 시간 추출 로직
-      console.log('📊 [실제조회] 개선된 시간 추출 방식 적용...');
-      
-      // 방법 1: 출근/퇴근 텍스트 주변에서 시간 찾기
-      const timesByContext = await page.evaluate(() => {
-        const result = { checkIn: null, checkOut: null };
-        
-        // 출근 시간 찾기
-        const checkinElement = Array.from(document.querySelectorAll('*')).find(el => 
-          el.textContent && el.textContent.includes('출근')
-        );
-        
-        if (checkinElement) {
-          const parent = checkinElement.closest('.attendance-check__item') || 
-                        checkinElement.closest('.check-item') ||
-                        checkinElement.parentElement;
-          if (parent) {
-            const timeElement = parent.querySelector('.check-time');
-            if (timeElement) {
-              result.checkIn = timeElement.textContent.trim();
-            }
-          }
-        }
-        
-        // 퇴근 시간 찾기
-        const checkoutElement = Array.from(document.querySelectorAll('*')).find(el => 
-          el.textContent && el.textContent.includes('퇴근')
-        );
-        
-        if (checkoutElement) {
-          const parent = checkoutElement.closest('.attendance-check__item') || 
-                        checkoutElement.closest('.check-item') ||
-                        checkoutElement.parentElement;
-          if (parent) {
-            const timeElement = parent.querySelector('.check-time');
-            if (timeElement) {
-              result.checkOut = timeElement.textContent.trim();
-            }
-          }
-        }
-        
-        return result;
-      });
-      
-      if (timesByContext.checkIn) {
-        checkInTime = timesByContext.checkIn;
-        console.log('✅ [실제조회] 출근 시간 추출 성공 (방법 1):', checkInTime);
-      }
-      
-      if (timesByContext.checkOut) {
-        checkOutTime = timesByContext.checkOut;
-        console.log('✅ [실제조회] 퇴근 시간 추출 성공 (방법 1):', checkOutTime);
-      }
-      
-      // 방법 2: 기존 방식 (백업)
-      if (!timesByContext.checkIn || !timesByContext.checkOut) {
-        console.log('📝 [실제조회] 방법 2: 기존 순서 기반 방식 시도...');
-        const timeElements = await page.$$('.check-time');
-        console.log(`📊 [실제조회] check-time 클래스 요소: ${timeElements.length}개 발견`);
-        
-        if (timeElements.length >= 1 && !timesByContext.checkIn) {
-          checkInTime = await page.evaluate(el => el.textContent.trim(), timeElements[0]);
-          console.log('✅ [실제조회] 출근 시간 추출 성공 (방법 2):', checkInTime);
-        }
-        
-        if (timeElements.length >= 2 && !timesByContext.checkOut) {
-          checkOutTime = await page.evaluate(el => el.textContent.trim(), timeElements[1]);
-          console.log('✅ [실제조회] 퇴근 시간 추출 성공 (방법 2):', checkOutTime);
-        } else if (timeElements.length === 1 && !timesByContext.checkOut) {
-          checkOutTime = '미등록';
-          console.log('📝 [실제조회] 퇴근 시간: 아직 퇴근 안 함');
-        }
-      }
-      
-    } catch (error) {
-      console.log('❌ [실제조회] 시간 추출 실패:', error.message);
-    }
-    
-    console.log(`🎯 [실제조회] 최종 결과 - 출근: ${checkInTime}, 퇴근: ${checkOutTime}`);
-    
-    return { checkInTime, checkOutTime };
+    return times;
     
   } catch (error) {
     console.error('❌ [실제조회] 전체 실패:', error.message);
