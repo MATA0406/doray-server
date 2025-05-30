@@ -494,9 +494,9 @@ async function performCheckIn() {
     const clickResult = await tryClickButton(checkInButton, '출근');
     
     if (clickResult === 'already_done') {
-      console.log("✅ 이미 출근 처리가 완료되었습니다!");
-      showNotification("출근 확인", "두레이 자동 출근", "이미 출근 처리가 완료되었습니다");
-      return { status: 'already_done', message: '이미 출근 완료' };
+      console.log("✅ 출근 버튼이 비활성화 상태 - 이미 출근 완료됨!");
+      showNotification("출근 확인", "두레이 자동 출근", "이미 출근 완료 - 버튼 비활성화됨");
+      return { status: 'already_done', message: '이미 출근 완료 - 버튼 비활성화됨' };
     } else if (clickResult === 'failed') {
       throw new Error("모든 클릭 방법이 실패했습니다. 출근 버튼을 클릭할 수 없습니다.");
     }
@@ -586,8 +586,8 @@ async function performCheckOut() {
       
       if (buttonAnalysis.disabledCheckoutButtons.length > 0) {
         console.log("✅ 퇴근 버튼이 비활성화 상태 - 이미 퇴근 완료됨");
-        showNotification("퇴근 확인", "두레이 자동 퇴근", "이미 퇴근 처리가 완료되었습니다");
-        return { status: 'already_done', message: '이미 퇴근 완료' };
+        showNotification("퇴근 확인", "두레이 자동 퇴근", "이미 퇴근 완료 - 버튼 비활성화됨");
+        return { status: 'already_done', message: '이미 퇴근 완료 - 버튼 비활성화됨' };
       } else {
         throw new Error("페이지에서 퇴근 버튼을 찾을 수 없습니다 (DOM에 퇴근 버튼 없음)");
       }
@@ -599,9 +599,9 @@ async function performCheckOut() {
     const clickResult = await tryClickButton(checkOutButton, '퇴근');
     
     if (clickResult === 'already_done') {
-      console.log("✅ 이미 퇴근 처리가 완료되었습니다!");
-      showNotification("퇴근 확인", "두레이 자동 퇴근", "이미 퇴근 처리가 완료되었습니다");
-      return { status: 'already_done', message: '이미 퇴근 완료' };
+      console.log("✅ 퇴근 버튼이 비활성화 상태 - 이미 퇴근 완료됨!");
+      showNotification("퇴근 확인", "두레이 자동 퇴근", "이미 퇴근 완료 - 버튼 비활성화됨");
+      return { status: 'already_done', message: '이미 퇴근 완료 - 버튼 비활성화됨' };
     } else if (clickResult === 'failed') {
       throw new Error("모든 클릭 방법이 실패했습니다. 퇴근 버튼을 클릭할 수 없습니다.");
     }
